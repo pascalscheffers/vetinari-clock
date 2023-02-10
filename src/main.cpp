@@ -18,6 +18,7 @@ unsigned long secondsActual = 120;
 int extra_ticks = 0;
 int correctionMode = 0; // 0 = normal, 1 = speed up, 2 = slow down
 bool no_ticking = false;
+bool normal_clock = false; // don't do vetinari and effects. 
 int sync_pointer = -1;
 
 #define NUM_LEDS 68
@@ -111,11 +112,17 @@ void oneHzLoop() {
   } else if (correctionMode != NEUTRAL_MODE && delta > -5 && delta < 5) {
     correctionMode = NEUTRAL_MODE;
   }
+  if (normal_clock) {
+    tick();
+  }
 }
 
 void fiveHzLoop() {
   // this function gets called at 200ms intervals, without drift. 
   long r = random(1000); // 0 - 999
+  if (normal_clock) {
+    r = 1000; // no ticks from this function. But will draw the leds.
+  }
 
   long threshold = 200;
   
@@ -146,9 +153,11 @@ void fiveHzLoop() {
   set_bar(six_bar, CRGB::Blue);
   set_bar(nine_bar, CRGB::Pink);
 
-  leds[second_map[secondsActual % 60]] = CRGB::DarkGreen;
-  if (sync_pointer > -1) {
-    leds[second_map[sync_pointer % 60]] = CRGB::DarkViolet;
+  if (!normal_clock) {
+    leds[second_map[secondsActual % 60]] = CRGB::DarkGreen;
+    if (sync_pointer > -1) {
+      leds[second_map[sync_pointer % 60]] = CRGB::DarkViolet;
+    }
   }
 
   led += 1;
@@ -186,13 +195,13 @@ void syncSecondsHand(int second) {
 
 void loop() {
   unsigned long now = millis();
-  if (now > fiveHzTimer) {
-    fiveHzTimer += 200; 
-    fiveHzLoop();
-  }
   if (now > oneHzTimer) {
     oneHzTimer += 1000;
     oneHzLoop();
+  }
+  if (now > fiveHzTimer) {
+    fiveHzTimer += 200; 
+    fiveHzLoop();
   }
   while (Serial.available()) {
     int byte = Serial.read();
@@ -206,6 +215,12 @@ void loop() {
         break;
       case 'd': // disable mechanical clock
         no_ticking = true;
+        break;
+      case 'n': // disable mechanical clock
+        normal_clock = true;
+        break;
+      case 'v': // disable mechanical clock
+        normal_clock = false;
         break;
       case 's': // step pointer to align with second hand.
         no_ticking = true;
