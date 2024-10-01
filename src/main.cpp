@@ -1,5 +1,7 @@
 #include <Arduino.h>
+#include <Wire.h>
 #include "FastLED.h"
+#include <DS3232RTC.h>
 
 /* This is a sketch for a clock which has uses random intervals to move the second hand 
    
@@ -21,8 +23,12 @@ bool no_ticking = false;
 bool normal_clock = false; // don't do vetinari and effects. 
 int sync_pointer = -1;
 
+constexpr uint8_t RTC_1HZ_PIN {3};  // RTC provides a 1Hz interrupt signal on this pin
+volatile time_t isrUTC;         // ISR's copy of current time in UTC
+
 #define NUM_LEDS 68
 #define LEDS_PIN 2
+#define MODE_SWITCH_PIN 7
 CRGB leds[NUM_LEDS];
 
 char second_map[60] = {66,64,63,62,61,60,59,58,57,56,55,54,53,52,51, 
@@ -44,8 +50,10 @@ char nine_bar[3] = {16, 15, 14};
 #define CLOCK_PIN_A 4
 #define CLOCK_PIN_B 5
 
+DS3232RTC myRTC;
+
 void tick() {   
-  static bool ticktock = false;
+  static bool ticktock = true;
   // move the second hand. 
   digitalWrite(13, HIGH);
   secondsTicked += 1;
@@ -73,7 +81,32 @@ void tick() {
 
 }
 
+// 1Hz RTC interrupt handler increments the current time
+void incrementTime()
+{
+    ++isrUTC;
+}
+
+// return current time
+time_t getUTC()
+{
+    noInterrupts();
+    time_t utc = isrUTC;
+    interrupts();
+    return utc;
+}
+
+// set the current time
+void setUTC(time_t utc)
+{
+    noInterrupts();
+    isrUTC = utc;
+    interrupts();
+}
+
+
 void setup() {
+
 
   FastLED.addLeds<WS2811, LEDS_PIN>(leds, NUM_LEDS);
   FastLED.setMaxPowerInVoltsAndMilliamps(5,500); 
@@ -85,9 +118,23 @@ void setup() {
   pinMode(CLOCK_PIN_B, OUTPUT);
   digitalWrite(CLOCK_PIN_A, LOW);
   digitalWrite(CLOCK_PIN_B, LOW);
+  pinMode(MODE_SWITCH_PIN, INPUT_PULLUP);
 
   randomSeed(analogRead(0));
 
+  // Realtime clock setup:
+  pinMode(RTC_1HZ_PIN, INPUT_PULLUP);     // enable pullup on interrupt pin (RTC SQW pin is open drain)
+  attachInterrupt(digitalPinToInterrupt(RTC_1HZ_PIN), incrementTime, FALLING);
+
+  myRTC.begin();
+  myRTC.squareWave(DS3232RTC::SQWAVE_1_HZ);   // 1 Hz square wave
+
+  time_t utc = getUTC();                  // synchronize with RTC
+  while ( utc == getUTC() );              // wait for increment to the next second
+  utc = myRTC.get();                      // get the time from the RTC
+  setUTC(utc);                            // set our time to the RTC's time
+
+  
   correctionMode = FAST_MODE;
 }
 
@@ -120,9 +167,19 @@ void oneHzLoop() {
 void fiveHzLoop() {
   // this function gets called at 200ms intervals, without drift. 
   long r = random(1000); // 0 - 999
+
+  if (digitalRead(MODE_SWITCH_PIN) == HIGH) {
+    // As we only read at 5Hz, no real need to debounce
+    normal_clock = true;
+  } else {
+    normal_clock = false;
+  }
+
   if (normal_clock) {
     r = 1000; // no ticks from this function. But will draw the leds.
   }
+
+
 
   long threshold = 200;
   
@@ -195,9 +252,17 @@ void syncSecondsHand(int second) {
 
 void loop() {
   unsigned long now = millis();
+  static time_t tLast;
+  time_t t = getUTC();
+
+    if (t != tLast) {
+        tLast = t;
+        oneHzLoop();
+        //printTime(t);
+    }  
   if (now > oneHzTimer) {
     oneHzTimer += 1000;
-    oneHzLoop();
+    //oneHzLoop();
   }
   if (now > fiveHzTimer) {
     fiveHzTimer += 200; 
